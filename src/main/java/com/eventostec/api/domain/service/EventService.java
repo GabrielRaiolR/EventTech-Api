@@ -6,6 +6,8 @@ import com.eventostec.api.domain.event.Event;
 import com.eventostec.api.domain.event.EventDetailsDTO;
 import com.eventostec.api.domain.event.EventRequestDTO;
 import com.eventostec.api.domain.event.EventResponseDTO;
+import com.eventostec.api.exception.BadRequestException;
+import com.eventostec.api.exception.ResourceNotFoundException;
 import com.eventostec.api.repositories.EventRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,6 +45,8 @@ public class EventService {
     private EventRepository repository;
 
     public Event createEvent(EventRequestDTO data){
+        validateEventRequest(data);
+
         String imgUrl = null;
 
         if(data.image() != null){
@@ -85,7 +89,7 @@ public class EventService {
 
     public EventDetailsDTO getEventDetails(UUID eventId) {
         Event event = repository.findById(eventId)
-                .orElseThrow(() -> new IllegalArgumentException("Event not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Event not found"));
 
         List<Coupon> coupons = couponService.consultCoupons(eventId, new Date());
 
@@ -147,6 +151,29 @@ public class EventService {
                         event.getImgUrl())
                 )
                 .stream().toList();
+    }
+
+    private void validateEventRequest(EventRequestDTO data) {
+        if (data.title() == null || data.title().isBlank()) {
+            throw new BadRequestException("title is required");
+        }
+        if (data.date() == null) {
+            throw new BadRequestException("date is required");
+        }
+        if (data.remote() == null) {
+            throw new BadRequestException("remote is required");
+        }
+        if (data.eventUrl() == null || data.eventUrl().isBlank()) {
+            throw new BadRequestException("eventUrl is required");
+        }
+        if (Boolean.FALSE.equals(data.remote())) {
+            if (data.city() == null || data.city().isBlank()) {
+                throw new BadRequestException("city is required for non-remote events");
+            }
+            if (data.state() == null || data.state().isBlank()) {
+                throw new BadRequestException("state is required for non-remote events");
+            }
+        }
     }
 
     private String uploadImg(MultipartFile multipartFile){
