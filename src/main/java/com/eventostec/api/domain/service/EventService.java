@@ -59,7 +59,7 @@ public class EventService {
 
         repository.save(newEvent);
 
-        if(!data.remote()){
+        if(!data.remote()) {
             this.addressService.createAddress(data, newEvent);
         }
 
@@ -108,10 +108,25 @@ public class EventService {
                 couponDTOs);
     }
 
-
-
-    public List<EventResponseDTO> getFilteredEvents(int page, int size, String title, String city, String uf, Date startDate, Date endDate){
+    public List<EventResponseDTO> searchEvents(String title){
         title = (title != null) ? title : "";
+
+        List<Event> eventsList = this.repository.findEventsByTitle(title);
+        return eventsList.stream().map(event -> new EventResponseDTO(
+                        event.getId(),
+                        event.getTitle(),
+                        event.getDescription(),
+                        event.getDate(),
+                        event.getAddress() != null ? event.getAddress().getCity() : "",
+                        event.getAddress() != null ? event.getAddress().getUf() : "",
+                        event.getRemote(),
+                        event.getEventUrl(),
+                        event.getImgUrl())
+                )
+                .toList();
+    }
+
+    public List<EventResponseDTO> getFilteredEvents(int page, int size, String city, String uf, Date startDate, Date endDate){
         city = (city != null) ? city : "";
         uf = (uf != null) ? uf : "";
         startDate = (startDate != null) ? startDate : new Date(0);
@@ -119,7 +134,7 @@ public class EventService {
 
         Pageable pageable = PageRequest.of(page, size);
 
-        Page<Event> eventsPage = this.repository.findFilteredEvents(title, city, uf, startDate, endDate, pageable);
+        Page<Event> eventsPage = this.repository.findFilteredEvents(city, uf, startDate, endDate, pageable);
         return eventsPage.map(event -> new EventResponseDTO(
                         event.getId(),
                         event.getTitle(),
