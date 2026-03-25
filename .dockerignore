@@ -1,0 +1,11 @@
+.git
+.idea
+.vscode
+*.iml
+target
+.env
+.env.*
+!.env.example
+*.md
+!README.md
+.mvn/wrapper/maven-wrapper.jar
