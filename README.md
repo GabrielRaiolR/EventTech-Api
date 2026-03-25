@@ -17,8 +17,13 @@ Backend REST para cadastro e consulta de **eventos**, com upload de imagens no *
 - [Pré-requisitos](#pré-requisitos)
 - [Configuração e variáveis de ambiente](#configuração-e-variáveis-de-ambiente)
 - [Como executar](#como-executar)
+- [Docker Compose (Postgres + API)](#docker-compose-postgres--api)
+- [Documentação OpenAPI (Swagger)](#documentação-openapi-swagger)
 - [API HTTP](#api-http)
+- [Erros da API (JSON padronizado)](#erros-da-api-json-padronizado)
 - [Testes](#testes)
+- [CI (GitHub Actions)](#ci-github-actions)
+- [Contribuição e setup](#contribuição-e-setup)
 - [Deploy na AWS (guia)](#deploy-na-aws-guia)
 - [Segurança e publicação no GitHub](#segurança-e-publicação-no-github)
 - [Licença](#licença)
@@ -52,6 +57,10 @@ A API expõe recursos sob `/api/event` e `/api/coupon`, seguindo uma arquitetura
 | Migrations | **Flyway** 9.x |
 | Nuvem | **AWS S3** (SDK Java 1.x), **RDS**, **EC2** (referência de deploy) |
 | Build | **Maven** |
+| API docs | **springdoc-openapi** (Swagger UI) |
+| Validação | **Jakarta Bean Validation** (`spring-boot-starter-validation`) |
+| Container | **Docker** / **Docker Compose** (Postgres + app) |
+| CI | **GitHub Actions** (`mvn verify`) |
 | Utilitários | Lombok, Spring Boot DevTools (opcional) |
 
 ---
@@ -101,6 +110,7 @@ flowchart LR
 | **Domínio** | `com.eventostec.api.domain.*` | Entidades JPA, DTOs de request/response |
 | **Persistência** | `com.eventostec.api.repositories` | Spring Data JPA |
 | **Infraestrutura** | `com.eventostec.api.config` | Beans AWS (`AmazonS3`) |
+| **Erros HTTP** | `com.eventostec.api.exception` | `GlobalExceptionHandler`, DTO `ApiErrorResponse`, exceções de domínio |
 | **Schema** | `src/main/resources/db/migration` | Scripts SQL versionados (Flyway) |
 
 ---
@@ -134,7 +144,11 @@ Na subida da aplicação, o Flyway aplica migrations pendentes antes (ou em conj
 ```text
 api/
 ├── pom.xml
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
 ├── .env.example                 # Modelo de variáveis (não contém segredos)
+├── .github/workflows/ci.yml     # Pipeline CI
 ├── README.md
 └── src/
     ├── main/
@@ -142,6 +156,7 @@ api/
     │   │   ├── ApiApplication.java
     │   │   ├── config/          # AWSConfig (bean S3)
     │   │   ├── controller/      # EventController, CouponController
+    │   │   ├── exception/       # GlobalExceptionHandler, ApiErrorResponse
     │   │   ├── domain/
     │   │   │   ├── address/
     │   │   │   ├── coupon/
@@ -165,6 +180,7 @@ api/
 - **Maven 3.9+** (ou wrapper do projeto, se preferir)
 - **PostgreSQL** rodando localmente ou acessível (ex.: RDS)
 - Credenciais **AWS** com permissão ao bucket S3 (ou **IAM Role** na EC2 em produção)
+- **Docker** e **Docker Compose** (opcional), para subir Postgres + API via [`docker-compose.yml`](docker-compose.yml)
 
 ---
 
@@ -210,6 +226,37 @@ Porta padrão: **8080** (Tomcat embutido).
 
 ---
 
+## Docker Compose (Postgres + API)
+
+Com **Docker** e **Docker Compose** você sobe Postgres e a API sem instalar o banco na máquina.
+
+1. Copie [`.env.example`](.env.example) para `.env` e ajuste, se quiser, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` e credenciais AWS (`AWS_S3_BUCKET` tem default `local-dev-bucket` no Compose).
+2. O Compose lê o arquivo `.env` na raiz para substituir variáveis em [`docker-compose.yml`](docker-compose.yml).
+3. Na raiz do projeto:
+
+```bash
+docker compose up --build
+```
+
+4. API em **http://localhost:8080**.
+
+O serviço `api` só sobe depois do Postgres ficar saudável (`healthcheck` com `pg_isready`). Os dados do Postgres ficam no volume `postgres_data`.
+
+**Upload S3:** sem `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` válidas, o upload pode falhar e `img_url` pode ficar vazio — se a coluna for `NOT NULL`, envie sempre o campo `image` no multipart ou use credenciais reais no `.env`.
+
+---
+
+## Documentação OpenAPI (Swagger)
+
+Com a aplicação rodando:
+
+- **Swagger UI:** [http://localhost:8080/swagger-ui.html](http://localhost:8080/swagger-ui.html)
+- **OpenAPI JSON:** `http://localhost:8080/v3/api-docs`
+
+No perfil `test`, a documentação OpenAPI fica desligada para acelerar os testes.
+
+---
+
 ## API HTTP
 
 **Base URL (local):** `http://localhost:8080`
@@ -221,13 +268,14 @@ Porta padrão: **8080** (Tomcat embutido).
 | `POST` | `/api/event` | Cria evento. `Content-Type: multipart/form-data`. Campos: `title`, `date` (epoch ms), `city`, `state`, `remote`, `eventUrl`; opcionais: `description`, `image` (arquivo) |
 | `GET` | `/api/event` | Lista eventos com data ≥ hoje. Query: `page` (default 0), `size` (default 10) |
 | `GET` | `/api/event/{eventId}` | Detalhe do evento (inclui dados agregados de endereço e cupons) |
-| `GET` | `/api/event/filter` | Filtros: `page`, `size`, `title`, `city`, `uf`, `startDate`, `endDate` (datas ISO) |
+| `GET` | `/api/event/filter` | Filtros obrigatórios: `city`, `uf`, `startDate`, `endDate` (ISO); paginação: `page`, `size` |
+| `GET` | `/api/event/search` | Busca por `title` (query param) |
 
 ### Cupons — `/api/coupon`
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
-| `POST` | `/api/coupon/event/{eventId}` | Corpo JSON (`CouponRequestDTO`) para vincular cupom ao evento |
+| `POST` | `/api/coupon/event/{eventId}` | Corpo JSON (`CouponRequestDTO` com validação: `code`, `discount` > 0, `valid`) |
 
 ### Exemplo (`curl`) — criar evento com imagem
 
@@ -246,13 +294,48 @@ curl -X POST "http://localhost:8080/api/event" \
 
 ---
 
+## Erros da API (JSON padronizado)
+
+O [`GlobalExceptionHandler`](src/main/java/com/eventostec/api/exception/GlobalExceptionHandler.java) devolve um corpo comum [`ApiErrorResponse`](src/main/java/com/eventostec/api/exception/ApiErrorResponse.java):
+
+- `timestamp`, `status`, `message`, `path`, `fieldErrors` (lista de `field` + `message`).
+
+| Situação | HTTP | Observação |
+|----------|------|------------|
+| Bean Validation (`@Valid` no JSON do cupom) | 400 | `message` = `Validation failed`, detalhes em `fieldErrors` |
+| Regras de criação de evento (título, data, `eventUrl`, endereço se não remoto) | 400 | `BadRequestException` |
+| Recurso não encontrado (ex.: evento inexistente) | 404 | `ResourceNotFoundException` |
+| `IllegalArgumentException` legada | 400 | Mantida por compatibilidade |
+| Erro não tratado | 500 | Mensagem genérica; detalhes só no log do servidor |
+
+---
+
 ## Testes
 
 ```bash
 mvn test
 ```
 
-O perfil **`test`** ativa `application-test.properties`: banco **H2** em memória, **Flyway desligado**, propriedades AWS fictícias para subir o contexto sem cloud real.
+O perfil **`test`** ativa `application-test.properties`: banco **H2** em memória, **Flyway desligado**, propriedades AWS fictícias e **springdoc desligado**.
+
+Há testes de fatia web com **`@WebMvcTest`** em [`EventControllerTest`](src/test/java/com/eventostec/api/controller/EventControllerTest.java) e [`CouponControllerTest`](src/test/java/com/eventostec/api/controller/CouponControllerTest.java) (com `@Import` do `GlobalExceptionHandler`).
+
+---
+
+## CI (GitHub Actions)
+
+O workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) roda em **push** e **pull_request** nas branches `main` e `master`:
+
+- JDK **21** (Eclipse Temurin), cache Maven
+- **`mvn -B verify`** (compila + testes)
+
+Não são necessários segredos da AWS no CI: os testes usam o perfil `test` com H2.
+
+**Badge (opcional):** após publicar no GitHub, você pode adicionar no topo do README:
+
+```markdown
+![CI](https://github.com/SEU_USUARIO/SEU_REPO/actions/workflows/ci.yml/badge.svg)
+```
 
 ---
 
@@ -324,6 +407,15 @@ curl "http://<IP_PUBLICO>:8080/api/event?page=0&size=10"
 - [ ] Bucket + permissões IAM corretas
 - [ ] Porta da API liberada conforme política de segurança
 - [ ] Nenhum segredo versionado no Git
+
+---
+
+## Contribuição e setup
+
+1. **Clone** o repositório e importe como projeto Maven.
+2. Copie **`.env.example`** → **`.env`**, preencha `SPRING_DATASOURCE_PASSWORD` e demais variáveis (veja [Configuração e variáveis de ambiente](#configuração-e-variáveis-de-ambiente)).
+3. **Não commite** `.env`, chaves `.pem` nem arquivos `application-local.properties` com segredos (vide [`.gitignore`](.gitignore)).
+4. Rode **`mvn verify`** antes de abrir PR (mesmo comando do CI).
 
 ---
 
